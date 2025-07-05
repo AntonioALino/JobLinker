@@ -21,6 +21,7 @@
   "homepage": "https://github.com/AntonioALino/JobLinker#readme",
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "axios": "^1.10.0",
     "dotenv": "^17.0.0",
     "express": "^5.1.0",
     "mammoth": "^1.9.1",
@@ -31,6 +32,7 @@
     "@types/express": "^5.0.3",
     "@types/multer": "^1.4.13",
     "@types/node": "^24.0.7",
+    "@types/pdf-parse": "^1.1.5",
     "nodemon": "^3.1.10",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3"

@@ -1,9 +1,11 @@
+// Em: apps/api/src/index.ts
 import express from 'express';
 import dotenv from 'dotenv';
 import multer from 'multer';
 import pdf from 'pdf-parse';
 import mammoth from 'mammoth';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import axios from 'axios'; 
 
 dotenv.config();
 
@@ -18,21 +20,11 @@ const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 app.use(express.json());
 
-
-app.post('/api/analyze', upload.single('cv'), async (req, res) : Promise<any>=> {
-
+app.post('/api/analyze', upload.single('cv'), async (req, res) : Promise<any> => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: 'Nenhum currículo enviado.' });
         }
-        console.log(`[DEBUG 2/7] Arquivo recebido: ${req.file.originalname}`);
-
-        const { jobDescription } = req.body;
-        if (!jobDescription) {
-            return res.status(400).json({ error: 'Descrição da vaga não fornecida.' });
-        }
-        console.log('[DEBUG 3/7] Descrição da vaga recebida.');
-
         let cvText = '';
         if (req.file.mimetype === 'application/pdf') {
             const data = await pdf(req.file.buffer);
@@ -41,10 +33,43 @@ app.post('/api/analyze', upload.single('cv'), async (req, res) : Promise<any>=> 
             const { value } = await mammoth.extractRawText({ buffer: req.file.buffer });
             cvText = value;
         } else {
-            return res.status(400).json({ error: 'Formato de arquivo não suportado. Use PDF ou DOCX.' });
+            return res.status(400).json({ error: 'Formato de arquivo não suportado.' });
+        }
+        const { jobDescription, jobUrl } = req.body;
+        let finalJobDescription = '';
+
+        if (jobUrl && jobUrl.trim() !== '') {
+            try {
+                const pageResponse = await axios.get(jobUrl, {
+                    headers: { 
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    }
+                });
+                const htmlContent = pageResponse.data;
+
+                const extractionPrompt = `
+                    Analise o seguinte conteúdo HTML de uma página de vaga de emprego. Sua única tarefa é extrair e retornar APENAS o texto principal da descrição da vaga. 
+                    Ignore completamente cabeçalhos, rodapés, menus de navegação, barras laterais, anúncios, scripts e qualquer outro conteúdo irrelevante.
+                    Retorne apenas o texto limpo da descrição.
+
+                    HTML: """
+                    ${htmlContent}
+                    """
+                `;
+                const extractionResult = await model.generateContent(extractionPrompt);
+                finalJobDescription = extractionResult.response.text();
+
+            } catch (scrapeError) {
+                console.error("Erro durante o scraping da URL:", scrapeError);
+                return res.status(500).json({ error: 'Falha ao buscar ou processar o conteúdo da URL fornecida.' });
+            }
+        } else if (jobDescription && jobDescription.trim() !== '') {
+            finalJobDescription = jobDescription;
+        } else {
+            return res.status(400).json({ error: 'Forneça a descrição da vaga ou um link válido.' });
         }
         
-        const prompt = `
+        const analysisPrompt = `
             Aja como um especialista em recrutamento técnico. Analise o currículo (CV) e a descrição da vaga a seguir.
             Com base na compatibilidade de habilidades, tecnologias, experiências e palavras-chave, forneça uma análise estruturada em formato JSON.
 
@@ -61,29 +86,28 @@ app.post('/api/analyze', upload.single('cv'), async (req, res) : Promise<any>=> 
             """
 
             Descrição da Vaga: """
-            ${jobDescription}
+            ${finalJobDescription} 
             """
         `;
 
-        const result = await model.generateContent(prompt);
+        const result = await model.generateContent(analysisPrompt);
         const responseText = result.response.text();
         
-
         const startIndex = responseText.indexOf('{');
         const endIndex = responseText.lastIndexOf('}');
-        
+
         if (startIndex === -1 || endIndex === -1) {
-            console.error("[ERRO] A resposta da IA não continha um objeto JSON válido.");
+            console.error("[ERRO CRÍTICO] A resposta da IA não continha um objeto JSON. A resposta foi:", responseText);
             throw new Error('A resposta da IA não continha um objeto JSON válido.');
         }
 
         const jsonString = responseText.slice(startIndex, endIndex + 1);
-        
         const analysisResult = JSON.parse(jsonString);
 
         res.json(analysisResult);
 
     } catch (error) {
+        console.error(error);
         res.status(500).json({ 
             error: 'Falha ao analisar o currículo.',
             details: error instanceof Error ? error.message : 'Erro desconhecido'
